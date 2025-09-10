@@ -1,0 +1,184 @@
+/* index.css */
+@import '/node_modules/@abdulrysr/saudi-riyal-new-symbol-font/style.css';
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    font-family: 'Almarai', sans-serif;
+  }
+
+  body {
+    @apply min-h-screen; /* Removed background gradient from body; moved to Login.tsx */
+  }
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fadeIn {
+  animation: fadeIn 0.3s ease-out forwards;
+}
+
+/* Keep your existing custom classes */
+.form-input-icon {
+  @apply absolute right-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400 transition-colors duration-200;
+}
+
+.form-input {
+  @apply appearance-none relative block w-full px-4 py-2 border border-gray-300 text-gray-900 rounded-lg 
+    focus:outline-none focus:ring-2 focus:ring-[#4A3B85] focus:border-transparent 
+    transition duration-200 ease-in-out text-right
+    bg-gray-50/50 hover:bg-white focus:bg-white text-sm;
+}
+
+input.form-input[class*='pr-'] {
+  @apply pr-12;
+}
+
+.form-input::placeholder {
+  @apply text-gray-400 text-xs;
+}
+
+.auth-button {
+  @apply w-full flex justify-center py-3.5 px-4 border border-transparent text-sm font-semibold rounded-lg text-white
+    bg-gradient-to-l from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 
+    focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 
+    transform transition-all duration-200 ease-in-out hover:scale-[1.02] active:scale-[0.98] 
+    shadow-md hover:shadow-lg;
+}
+
+.auth-link {
+  @apply font-medium text-blue-600 hover:text-blue-700 transition-colors duration-200 hover:underline;
+}
+
+.auth-card {
+  @apply max-w-md w-full space-y-8 bg-white/80 p-10 rounded-2xl 
+    shadow-[0_8px_30px_rgb(0,0,0,0.08)] backdrop-blur-sm border border-gray-100
+    hover:bg-white/90 transition-all duration-300;
+}
+
+/* Modal styles unchanged */
+.modal {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%) scale(0.9);
+  opacity: 0;
+  width: 90%;
+  max-width: 300px;
+  background: white;
+  border-radius: 8px;
+  padding: 11px;
+  outline: none;
+  font-size: 12px;
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+
+.ReactModal__Content--after-open {
+  opacity: 1;
+}
+
+.ReactModal__Content--before-close {
+  opacity: 0;
+  transform: translate(-50%, -50%) scale(0.9);
+}
+
+.overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.5);
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.ReactModal__Overlay--after-open {
+  opacity: 1;
+}
+
+.ReactModal__Overlay--before-close {
+  opacity: 0;
+}
+
+/* Add this to your CSS file */
+.page-transition {
+  opacity: 0;
+  transform: translateY(20px);
+  animation: fadeInUp 0.3s ease forwards;
+}
+
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.page-exit {
+  opacity: 1;
+  transform: translateY(0);
+  animation: fadeOutDown 0.3s ease forwards;
+}
+
+@keyframes fadeOutDown {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-20px);
+  }
+}
+
+@keyframes fadeInDown {
+  from {
+    opacity: 0;
+    transform: translateY(-5px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in-down {
+  animation: fadeInDown 0.2s ease-out forwards;
+}
+
+[dir="rtl"] {
+  --text-align: right;
+  --flex-direction: row-reverse;
+}
+[dir="ltr"] {
+  --text-align: left;
+  --flex-direction: row;
+}
+.table-header {
+  text-align: var(--text-align);
+  flex-direction: var(--flex-direction);
+}
+
+.parent-block {
+  direction: rtl;
+}
+.child-block {
+  direction: rtl;
+  padding-right: 1rem; /* Matches pr-4 */
+}
