@@ -25,6 +25,7 @@ interface InvoiceItem {
   vat_amount: number;
   price_with_vat: number;
   total_amount: number;
+  item_type: 'purchase' | 'expense'; // New field to distinguish item types
 }
 
 interface PurchaseInvoice {
@@ -137,7 +138,8 @@ function InvoiceBreakdown() {
       vat_rate: vatRate,
       vat_amount: Number(vatAmount.toFixed(2)),
       price_with_vat: Number(priceWithVat.toFixed(2)),
-      total_amount: Number(totalAmount.toFixed(2))
+      total_amount: Number(totalAmount.toFixed(2)),
+      item_type: item.item_type || 'purchase'
     };
   };
 
@@ -150,7 +152,8 @@ function InvoiceBreakdown() {
       vat_rate: defaultVatRate,
       vat_amount: 0,
       price_with_vat: 0,
-      total_amount: 0
+      total_amount: 0,
+      item_type: 'purchase'
     };
     
     const calculatedItem = calculateItemTotals(newItem);
@@ -389,6 +392,9 @@ function InvoiceBreakdown() {
                   الإجمالي
                 </th>
                 <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  نوع العنصر
+                </th>
+                <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
                   الإجراءات
                 </th>
               </tr>
@@ -455,6 +461,16 @@ function InvoiceBreakdown() {
                     {Number(item.total_amount).toFixed(2)} ر.س
                   </td>
                   <td className="px-4 py-3">
+                    <select
+                      value={item.item_type}
+                      onChange={(e) => updateItem(index, 'item_type', e.target.value as 'purchase' | 'expense')}
+                      className="w-full px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-[#4A3B85] focus:border-transparent text-sm"
+                    >
+                      <option value="purchase">عنصر شراء</option>
+                      <option value="expense">مصروف</option>
+                    </select>
+                  </td>
+                  <td className="px-4 py-3">
                     <button
                       onClick={() => removeItem(index)}
                       className="text-red-600 hover:text-red-900 transition-colors duration-200"
@@ -467,7 +483,7 @@ function InvoiceBreakdown() {
               
               {items.length === 0 && (
                 <tr>
-                  <td colSpan={9} className="px-4 py-8 text-center text-gray-500">
+                  <td colSpan={10} className="px-4 py-8 text-center text-gray-500">
                     <Package className="h-12 w-12 text-gray-400 mx-auto mb-4" />
                     <p>لا توجد عناصر في الفاتورة</p>
                     <button
