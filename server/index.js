@@ -784,7 +784,7 @@ app.get('/api/purchases/:id/items', authenticateToken, async (req, res) => {
 
     // Fetch invoice items
     const [items] = await pool.execute(
-      'SELECT * FROM purchase_invoice_items WHERE purchase_id = ? ORDER BY id',
+      `SELECT 
         id,
         name,
         code,
@@ -893,24 +893,12 @@ app.post('/api/purchases/:id/items', authenticateToken, async (req, res) => {
       [id]
     );
 
-    // Get purchase details for expense creation
-    const [purchaseRows] = await pool.execute(
-      'SELECT supplier_name, project_id FROM purchases WHERE id = ? AND created_by = ?',
-      [id, req.user.id]
-    );
-
-    if (purchaseRows.length === 0) {
-      return res.status(404).json({ success: false, error: 'Purchase not found' });
-    }
-
-    const purchase = purchaseRows[0];
-
     // Insert new items
     for (const item of items) {
       // Calculate values
-        `INSERT INTO purchase_invoice_items 
-         (purchase_id, name, code, quantity, price_before_vat, vat_rate, vat_amount, price_with_vat, total_amount, item_type) 
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      const quantity = parseFloat(item.quantity);
+      const priceBeforeVat = parseFloat(item.price_before_vat);
+      const vatRate = parseFloat(item.vat_rate || 0);
       const vatAmount = (priceBeforeVat * vatRate) / 100;
       const priceWithVat = priceBeforeVat + vatAmount;
       const totalAmount = quantity * priceWithVat;
@@ -1240,29 +1228,9 @@ app.put('/api/purchases/:id', authenticateToken, upload.single('file'), async (r
           req.file.path,
           req.file.mimetype,
           req.file.size,
-          item.total_amount,
-          item.item_type || 'purchase'
+          req.user.id
         ]
       );
-
-      // If item is marked as expense, create miscellaneous expense entry
-      if (item.item_type === 'expense') {
-        await pool.execute(
-          `INSERT INTO miscellaneous_expenses 
-           (description, amount, category, date, payment_method, notes, project_id, created_by, from_invoice_breakdown) 
-           VALUES (?, ?, ?, NOW(), ?, ?, ?, ?, ?)`,
-          [
-            `${item.name} - ${purchase.supplier_name}`,
-            item.total_amount,
-            'من تفريغ فاتورة',
-            'تحويل من فاتورة',
-            `تم تحويله من تفريغ فاتورة - الكود: ${item.code}`,
-            purchase.project_id,
-            req.user.id,
-            true
-          ]
-        );
-      }
     }
 
     await connection.commit();
@@ -1575,9 +1543,6 @@ app.get('/api/miscellaneous-expenses', authenticateToken, async (req, res) => {
     // Process file paths
     const processedExpenses = expenses.map(expense => {
       if (expense.file_path) {
-    const balanceImpactAmount = expenses
-      .filter(expense => !expense.from_invoice_breakdown)
-      .reduce((sum, expense) => sum + parseFloat(expense.amount), 0);
         const actualFileName = path.basename(expense.file_path);
         expense.file_url = `/uploads/${actualFileName}`;
       }
@@ -1648,8 +1613,7 @@ app.post('/api/miscellaneous-expenses', authenticateToken, upload.single('file')
       original_file_name: null,
       file_path: null,
       file_type: null,
-      averageAmount,
-      balanceImpactAmount
+      file_size: null
     };
 
     if (req.file) {
@@ -1663,10 +1627,9 @@ app.post('/api/miscellaneous-expenses', authenticateToken, upload.single('file')
 
     const [result] = await pool.execute(
       `INSERT INTO miscellaneous_expenses 
-       (description, amount, category, date, payment_method, notes, project_id, created_by, original_file_name, file_path, file_type, file_url, from_invoice_breakdown) 
+       (description, amount, category, date, payment_method, notes, project_id, user_id, original_file_name, file_path, file_type, file_size, from_invoice_breakdown) 
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
-        req.user.id, 
         description, 
         parseFloat(amount), 
         category, 
@@ -1674,11 +1637,11 @@ app.post('/api/miscellaneous-expenses', authenticateToken, upload.single('file')
         payment_method, 
         notes || null, 
         project_id,
+        req.user.id, 
         fileData.original_file_name,
         fileData.file_path,
         fileData.file_type,
-        fileData?.file_url || null,
-        false
+        fileData.file_size,
         false
       ]
     );
@@ -2009,4 +1972,38 @@ app.put('/api/company-settings', authenticateToken, async (req, res) => {
       [req.user.id]
     );
 
-    if (existing.length >
+    if (existing.length > 0) {
+      await pool.execute(
+        `UPDATE company_settings 
+         SET company_name = ?, initial_balance = ?, contact_email = ?, contact_phone = ?, address = ?
+         WHERE user_id = ?`,
+        [company_name, parseFloat(initial_balance || 0), contact_email || null, contact_phone || null, address || null, req.user.id]
+      );
+    } else {
+      await pool.execute(
+        `INSERT INTO company_settings (user_id, company_name, initial_balance, contact_email, contact_phone, address) 
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [req.user.id, company_name, parseFloat(initial_balance || 0), contact_email || null, contact_phone || null, address || null]
+      );
+    }
+
+    // Get updated settings
+    const [updatedSettings] = await pool.execute(
+      'SELECT * FROM company_settings WHERE user_id = ?',
+      [req.user.id]
+    );
+
+    res.json({
+      success: true,
+      message: 'تم تحديث إعدادات الشركة بنجاح',
+      data: updatedSettings[0]
+    });
+  } catch (error) {
+    console.error('Error updating company settings:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'خطأ في تحديث إعدادات الشركة',
+      details: error.message 
+    });
+  }
+});
