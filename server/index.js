@@ -867,6 +867,26 @@ app.post('/api/purchases/:id/items', authenticateToken, async (req, res) => {
       }
     }
 
+    // Get purchase details for expense creation
+    const [purchaseRows] = await connection.execute(
+      'SELECT supplier_id, project_id FROM purchase_invoices WHERE id = ? AND created_by = ?',
+      [id, req.user.id]
+    );
+
+    if (purchaseRows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Purchase not found' });
+    }
+
+    const purchase = purchaseRows[0];
+
+    // Get supplier name
+    const [supplierRows] = await connection.execute(
+      'SELECT name FROM suppliers WHERE id = ?',
+      [purchase.supplier_id]
+    );
+
+    const supplierName = supplierRows.length > 0 ? supplierRows[0].name : 'مورد غير معروف';
+
     // Delete existing items for this invoice
     await connection.execute(
       'DELETE FROM purchase_invoice_products WHERE purchase_invoice_id = ?',
@@ -894,8 +914,9 @@ app.post('/api/purchases/:id/items', authenticateToken, async (req, res) => {
           vat_amount,
           price_with_vat,
           total_amount,
+          item_type,
           created_by
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           id,
           item.name.trim(),
@@ -906,9 +927,29 @@ app.post('/api/purchases/:id/items', authenticateToken, async (req, res) => {
           vatAmount,
           priceWithVat,
           totalAmount,
+          item.item_type || 'purchase',
           req.user.id
         ]
       );
+
+      // If item is marked as expense, create miscellaneous expense entry
+      if (item.item_type === 'expense') {
+        await connection.execute(
+          `INSERT INTO miscellaneous_expenses 
+           (description, amount, category, date, payment_method, notes, project_id, user_id, from_invoice_breakdown) 
+           VALUES (?, ?, ?, NOW(), ?, ?, ?, ?, ?)`,
+          [
+            `${item.name} - ${supplierName}`,
+            totalAmount,
+            'من تفريغ فاتورة',
+            'تحويل من فاتورة',
+            `تم تحويله من تفريغ فاتورة - الكود: ${item.code}`,
+            purchase.project_id,
+            req.user.id,
+            true
+          ]
+        );
+      }
     }
 
     // Calculate and update breakdown totals
@@ -1453,6 +1494,11 @@ app.get('/api/miscellaneous-expenses', authenticateToken, async (req, res) => {
         me.created_at, 
         me.updated_at,
         me.project_id,
+        me.original_file_name,
+        me.file_path,
+        me.file_type,
+        me.file_size,
+        me.from_invoice_breakdown,
         p.name as project_name
       FROM miscellaneous_expenses me
       LEFT JOIN projects p ON me.project_id = p.id
@@ -1494,16 +1540,29 @@ app.get('/api/miscellaneous-expenses', authenticateToken, async (req, res) => {
 
     const [expenses] = await pool.execute(query, queryParams);
     
+    // Process file paths
+    const processedExpenses = expenses.map(expense => {
+      if (expense.file_path) {
+        const actualFileName = path.basename(expense.file_path);
+        expense.file_url = `/uploads/${actualFileName}`;
+      }
+      return expense;
+    });
+    
     // Calculate totals
-    const totalAmount = expenses.reduce((sum, expense) => sum + parseFloat(expense.amount), 0);
+    const totalAmount = processedExpenses.reduce((sum, expense) => sum + parseFloat(expense.amount), 0);
+    const balanceImpactAmount = processedExpenses
+      .filter(expense => !expense.from_invoice_breakdown)
+      .reduce((sum, expense) => sum + parseFloat(expense.amount), 0);
     
     res.json({
       success: true,
-      data: expenses,
+      data: processedExpenses,
       summary: {
-        totalExpenses: expenses.length,
+        totalExpenses: processedExpenses.length,
         totalAmount: totalAmount,
-        averageAmount: expenses.length > 0 ? totalAmount / expenses.length : 0
+        averageAmount: processedExpenses.length > 0 ? totalAmount / processedExpenses.length : 0,
+        balanceImpactAmount
       }
     });
   } catch (error) {
@@ -1568,8 +1627,8 @@ app.post('/api/miscellaneous-expenses', authenticateToken, upload.single('file')
 
     const [result] = await pool.execute(
       `INSERT INTO miscellaneous_expenses 
-       (user_id, description, amount, category, date, payment_method, notes, project_id, original_file_name, file_path, file_type, file_size) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (user_id, description, amount, category, date, payment_method, notes, project_id, original_file_name, file_path, file_type, file_size, from_invoice_breakdown) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         req.user.id, 
         description, 
@@ -1582,7 +1641,8 @@ app.post('/api/miscellaneous-expenses', authenticateToken, upload.single('file')
         fileData.original_file_name,
         fileData.file_path,
         fileData.file_type,
-        fileData.file_size
+        fileData.file_size,
+        false
       ]
     );
 
@@ -1737,99 +1797,6 @@ app.delete('/api/miscellaneous-expenses/:id', authenticateToken, async (req, res
     });
   }
 });
-
-// Get expense categories (for dropdown)
-app.get('/api/miscellaneous-expenses', authenticateToken, async (req, res) => {
-  try {
-    const { category, search, startDate, endDate, projectId } = req.query;
-    let query = `
-      SELECT 
-        me.id, 
-        me.description, 
-        me.amount, 
-        me.category, 
-        me.date, 
-        me.payment_method, 
-        me.notes, 
-        me.created_at, 
-        me.updated_at,
-        me.project_id,
-        me.original_file_name,
-        me.file_path,
-        me.file_type,
-        me.file_size,
-        p.name as project_name
-      FROM miscellaneous_expenses me
-      LEFT JOIN projects p ON me.project_id = p.id
-      WHERE me.user_id = ?
-    `;
-    const queryParams = [req.user.id];
-
-    // Add filters
-    if (category) {
-      query += ' AND me.category = ?';
-      queryParams.push(category);
-    }
-
-    if (search) {
-      query += ' AND (me.description LIKE ? OR me.category LIKE ? OR p.name LIKE ?)';
-      queryParams.push(`%${search}%`, `%${search}%`, `%${search}%`);
-    }
-
-    if (startDate) {
-      query += ' AND me.date >= ?';
-      queryParams.push(startDate);
-    }
-
-    if (endDate) {
-      query += ' AND me.date <= ?';
-      queryParams.push(endDate);
-    }
-
-    if (projectId) {
-      if (projectId === 'unassigned') {
-        query += ' AND me.project_id IS NULL';
-      } else {
-        query += ' AND me.project_id = ?';
-        queryParams.push(projectId);
-      }
-    }
-
-    query += ' ORDER BY me.date DESC, me.created_at DESC';
-
-    const [expenses] = await pool.execute(query, queryParams);
-    
-    // Process file paths
-    const processedExpenses = expenses.map(expense => {
-      if (expense.file_path) {
-        const actualFileName = path.basename(expense.file_path);
-        expense.file_url = `/uploads/${actualFileName}`;
-      }
-      return expense;
-    });
-    
-    // Calculate totals
-    const totalAmount = processedExpenses.reduce((sum, expense) => sum + parseFloat(expense.amount), 0);
-    
-    res.json({
-      success: true,
-      data: processedExpenses,
-      summary: {
-        totalExpenses: processedExpenses.length,
-        totalAmount: totalAmount,
-        averageAmount: processedExpenses.length > 0 ? totalAmount / processedExpenses.length : 0
-      }
-    });
-  } catch (error) {
-    console.error('Error fetching miscellaneous expenses:', error);
-    res.status(500).json({ 
-      success: false, 
-      error: 'خطأ في جلب المصروفات المتفرقة',
-      details: error.message 
-    });
-  }
-});
-
 
 // Get company balance
 app.get('/api/company-balance', authenticateToken, async (req, res) => {
@@ -2005,520 +1972,4 @@ app.put('/api/company-settings', authenticateToken, async (req, res) => {
       [req.user.id]
     );
 
-    if (existing.length > 0) {
-      await pool.execute(
-        `UPDATE company_settings 
-         SET company_name = ?, initial_balance = ?, contact_email = ?, contact_phone = ?, address = ?
-         WHERE user_id = ?`,
-        [company_name, parseFloat(initial_balance) || 0, contact_email || null, contact_phone || null, address || null, req.user.id]
-      );
-    } else {
-      await pool.execute(
-        `INSERT INTO company_settings (user_id, company_name, initial_balance, contact_email, contact_phone, address) 
-         VALUES (?, ?, ?, ?, ?, ?)`,
-        [req.user.id, company_name, parseFloat(initial_balance) || 0, contact_email || null, contact_phone || null, address || null]
-      );
-    }
-
-    res.json({
-      success: true,
-      message: 'تم حفظ الإعدادات بنجاح'
-    });
-  } catch (error) {
-    console.error('Error updating company settings:', error);
-    res.status(500).json({ 
-      success: false, 
-      error: 'خطأ في حفظ الإعدادات',
-      details: error.message 
-    });
-  }
-});
-
-// Get withdrawals/deposits
-app.get('/api/withdrawals-deposits', authenticateToken, async (req, res) => {
-  try {
-    const { search, type, startDate, endDate } = req.query;
-    
-    let query = `
-      SELECT 
-        wd.id,
-        wd.type,
-        wd.amount,
-        wd.description,
-        wd.date,
-        wd.payment_method,
-        wd.notes,
-        wd.created_at,
-        wd.updated_at,
-        u.file_name as original_file_name,
-        u.file_path,
-        u.file_type
-      FROM withdrawals_deposits wd
-      LEFT JOIN withdrawals_deposits_uploads u ON wd.id = u.transaction_id
-      WHERE wd.user_id = ?
-    `;
-    const queryParams = [req.user.id];
-
-    // Add filters
-    if (search) {
-      query += ' AND (wd.description LIKE ? OR wd.notes LIKE ?)';
-      queryParams.push(`%${search}%`, `%${search}%`);
-    }
-
-    if (type) {
-      query += ' AND wd.type = ?';
-      queryParams.push(type);
-    }
-
-    if (startDate) {
-      query += ' AND wd.date >= ?';
-      queryParams.push(startDate);
-    }
-
-    if (endDate) {
-      query += ' AND wd.date <= ?';
-      queryParams.push(endDate);
-    }
-
-    query += ' ORDER BY wd.date DESC, wd.created_at DESC';
-
-    const [transactions] = await pool.execute(query, queryParams);
-
-    // Process file paths
-    const processedTransactions = transactions.map(transaction => {
-      if (transaction.file_path) {
-        const actualFileName = path.basename(transaction.file_path);
-        transaction.file_url = `/uploads/${actualFileName}`;
-      }
-      return transaction;
-    });
-
-    // Calculate summary
-    const totalWithdrawals = processedTransactions
-      .filter(t => t.type === 'withdrawal')
-      .reduce((sum, t) => sum + parseFloat(t.amount), 0);
-    
-    const totalDeposits = processedTransactions
-      .filter(t => t.type === 'deposit')
-      .reduce((sum, t) => sum + parseFloat(t.amount), 0);
-
-    res.json({
-      success: true,
-      data: processedTransactions,
-      summary: {
-        totalTransactions: processedTransactions.length,
-        totalWithdrawals,
-        totalDeposits,
-        netAmount: totalDeposits - totalWithdrawals
-      }
-    });
-  } catch (error) {
-    console.error('Error fetching withdrawals/deposits:', error);
-    res.status(500).json({ 
-      success: false, 
-      error: 'خطأ في جلب المعاملات',
-      details: error.message 
-    });
-  }
-});
-
-// Create withdrawal/deposit
-app.post('/api/withdrawals-deposits', authenticateToken, upload.single('file'), async (req, res) => {
-  const connection = await pool.getConnection();
-  try {
-    await connection.beginTransaction();
-
-    const { type, amount, description, date, payment_method, notes } = req.body;
-
-    // Validation
-    if (!type || !amount || !description || !date || !payment_method) {
-      return res.status(400).json({ 
-        success: false, 
-        error: 'جميع الحقول مطلوبة' 
-      });
-    }
-
-    if (isNaN(amount) || parseFloat(amount) <= 0) {
-      return res.status(400).json({ 
-        success: false, 
-        error: 'المبلغ يجب أن يكون رقماً موجباً' 
-      });
-    }
-
-    // Create transaction record
-    const [result] = await connection.execute(
-      `INSERT INTO withdrawals_deposits (
-        user_id, type, amount, description, date, payment_method, notes
-      ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [req.user.id, type, parseFloat(amount), description, date, payment_method, notes || null]
-    );
-
-    const transactionId = result.insertId;
-
-    // If file was uploaded, create upload record
-    if (req.file) {
-      await connection.execute(
-        `INSERT INTO withdrawals_deposits_uploads (
-          transaction_id,
-          file_name,
-          file_path,
-          file_type,
-          file_size,
-          created_by
-        ) VALUES (?, ?, ?, ?, ?, ?)`,
-        [
-          transactionId,
-          req.file.originalname,
-          req.file.path,
-          req.file.mimetype,
-          req.file.size,
-          req.user.id
-        ]
-      );
-    }
-
-    await connection.commit();
-    res.status(201).json({
-      success: true,
-      message: 'تم إضافة المعاملة بنجاح'
-    });
-  } catch (error) {
-    await connection.rollback();
-    console.error('Error creating withdrawal/deposit:', error);
-    res.status(500).json({ 
-      success: false, 
-      error: 'خطأ في إضافة المعاملة',
-      details: error.message 
-    });
-  } finally {
-    connection.release();
-  }
-});
-
-// Update withdrawal/deposit
-app.put('/api/withdrawals-deposits/:id', authenticateToken, upload.single('file'), async (req, res) => {
-  const connection = await pool.getConnection();
-  try {
-    await connection.beginTransaction();
-
-    const { id } = req.params;
-    const { type, amount, description, date, payment_method, notes } = req.body;
-
-    // Check if transaction exists and belongs to user
-    const [existingTransaction] = await connection.execute(
-      'SELECT id FROM withdrawals_deposits WHERE id = ? AND user_id = ?',
-      [id, req.user.id]
-    );
-
-    if (existingTransaction.length === 0) {
-      return res.status(404).json({ 
-        success: false, 
-        error: 'المعاملة غير موجودة' 
-      });
-    }
-
-    // Validation
-    if (!type || !amount || !description || !date || !payment_method) {
-      return res.status(400).json({ 
-        success: false, 
-        error: 'جميع الحقول مطلوبة' 
-      });
-    }
-
-    if (isNaN(amount) || parseFloat(amount) <= 0) {
-      return res.status(400).json({ 
-        success: false, 
-        error: 'المبلغ يجب أن يكون رقماً موجباً' 
-      });
-    }
-
-    // Update transaction
-    await connection.execute(
-      `UPDATE withdrawals_deposits 
-       SET type = ?, amount = ?, description = ?, date = ?, payment_method = ?, notes = ?
-       WHERE id = ? AND user_id = ?`,
-      [type, parseFloat(amount), description, date, payment_method, notes || null, id, req.user.id]
-    );
-
-    // If new file was uploaded, replace the old one
-    if (req.file) {
-      // Delete old upload record and file
-      const [oldUploads] = await connection.execute(
-        'SELECT file_path FROM withdrawals_deposits_uploads WHERE transaction_id = ?',
-        [id]
-      );
-
-      await connection.execute(
-        'DELETE FROM withdrawals_deposits_uploads WHERE transaction_id = ?',
-        [id]
-      );
-
-      // Delete old files from disk
-      for (const upload of oldUploads) {
-        if (upload.file_path) {
-          try {
-            await fs.unlink(upload.file_path);
-          } catch (fileError) {
-            console.error(`Error deleting old file ${upload.file_path}:`, fileError);
-          }
-        }
-      }
-
-      // Create new upload record
-      await connection.execute(
-        `INSERT INTO withdrawals_deposits_uploads (
-          transaction_id,
-          file_name,
-          file_path,
-          file_type,
-          file_size,
-          created_by
-        ) VALUES (?, ?, ?, ?, ?, ?)`,
-        [
-          id,
-          req.file.originalname,
-          req.file.path,
-          req.file.mimetype,
-          req.file.size,
-          req.user.id
-        ]
-      );
-    }
-
-    await connection.commit();
-    res.json({
-      success: true,
-      message: 'تم تحديث المعاملة بنجاح'
-    });
-  } catch (error) {
-    await connection.rollback();
-    console.error('Error updating withdrawal/deposit:', error);
-    res.status(500).json({ 
-      success: false, 
-      error: 'خطأ في تحديث المعاملة',
-      details: error.message 
-    });
-  } finally {
-    connection.release();
-  }
-});
-
-// Delete withdrawal/deposit
-app.delete('/api/withdrawals-deposits/:id', authenticateToken, async (req, res) => {
-  const connection = await pool.getConnection();
-  try {
-    await connection.beginTransaction();
-
-    const { id } = req.params;
-
-    // Check if transaction exists and belongs to user
-    const [existingTransaction] = await connection.execute(
-      'SELECT id FROM withdrawals_deposits WHERE id = ? AND user_id = ?',
-      [id, req.user.id]
-    );
-
-    if (existingTransaction.length === 0) {
-      return res.status(404).json({ 
-        success: false, 
-        error: 'المعاملة غير موجودة' 
-      });
-    }
-
-    // Delete upload files first
-    const [uploads] = await connection.execute(
-      'SELECT file_path FROM withdrawals_deposits_uploads WHERE transaction_id = ?',
-      [id]
-    );
-
-    // Delete files from disk
-    for (const upload of uploads) {
-      if (upload.file_path) {
-        try {
-          await fs.unlink(upload.file_path);
-        } catch (fileError) {
-          console.error(`Error deleting file ${upload.file_path}:`, fileError);
-        }
-      }
-    }
-
-    // Delete upload records
-    await connection.execute(
-      'DELETE FROM withdrawals_deposits_uploads WHERE transaction_id = ?',
-      [id]
-    );
-
-    // Delete transaction
-    await connection.execute(
-      'DELETE FROM withdrawals_deposits WHERE id = ? AND user_id = ?',
-      [id, req.user.id]
-    );
-
-    await connection.commit();
-    res.json({
-      success: true,
-      message: 'تم حذف المعاملة بنجاح'
-    });
-  } catch (error) {
-    await connection.rollback();
-    console.error('Error deleting withdrawal/deposit:', error);
-    res.status(500).json({ 
-      success: false, 
-      error: 'خطأ في حذف المعاملة',
-      details: error.message 
-    });
-  } finally {
-    connection.release();
-  }
-});
-
-// Get expense statistics
-app.get('/api/miscellaneous-expenses/statistics', authenticateToken, async (req, res) => {
-  try {
-    const { startDate, endDate } = req.query;
-    
-    let dateFilter = '';
-    const queryParams = [req.user.id];
-    
-    if (startDate && endDate) {
-      dateFilter = 'AND date BETWEEN ? AND ?';
-      queryParams.push(startDate, endDate);
-    } else if (startDate) {
-      dateFilter = 'AND date >= ?';
-      queryParams.push(startDate);
-    } else if (endDate) {
-      dateFilter = 'AND date <= ?';
-      queryParams.push(endDate);
-    }
-
-    // Get total statistics
-    const [totalStats] = await pool.execute(
-      `SELECT 
-        COUNT(*) as totalCount,
-        SUM(amount) as totalAmount,
-        AVG(amount) as averageAmount,
-        MIN(amount) as minAmount,
-        MAX(amount) as maxAmount
-       FROM miscellaneous_expenses 
-       WHERE user_id = ? ${dateFilter}`,
-      queryParams
-    );
-
-    // Get category breakdown
-    const [categoryStats] = await pool.execute(
-      `SELECT 
-        category,
-        COUNT(*) as count,
-        SUM(amount) as total,
-        AVG(amount) as average
-       FROM miscellaneous_expenses 
-       WHERE user_id = ? ${dateFilter}
-       GROUP BY category 
-       ORDER BY total DESC`,
-      queryParams
-    );
-
-    // Get monthly breakdown
-    const [monthlyStats] = await pool.execute(
-      `SELECT 
-        DATE_FORMAT(date, '%Y-%m') as month,
-        COUNT(*) as count,
-        SUM(amount) as total
-       FROM miscellaneous_expenses 
-       WHERE user_id = ? ${dateFilter}
-       GROUP BY DATE_FORMAT(date, '%Y-%m') 
-       ORDER BY month DESC 
-       LIMIT 12`,
-      queryParams
-    );
-
-    res.json({
-      success: true,
-      data: {
-        total: totalStats[0],
-        byCategory: categoryStats,
-        byMonth: monthlyStats
-      }
-    });
-  } catch (error) {
-    console.error('Error fetching expense statistics:', error);
-    res.status(500).json({ 
-      success: false, 
-      error: 'خطأ في جلب إحصائيات المصروفات',
-      details: error.message 
-    });
-  }
-});
-
-
-
-// Start server with error handling and startup time logging
-const port = process.env.PORT || 3000;
-app.get('/', (req, res) => {
-  res.send('Server is running! 🚀');
-});
-
-// Lazy-load puppeteer to reduce startup time
-let puppeteerBrowser = null;
-async function getPuppeteerBrowser() {
-  if (!puppeteerBrowser) {
-    const puppeteer = require('puppeteer');
-    puppeteerBrowser = await puppeteer.launch();
-  }
-  return puppeteerBrowser;
-}
-
-const startTime = Date.now();
-app.listen(port, '0.0.0.0', () => {
-  console.log(`Server is running on port ${port}. Startup took ${Date.now() - startTime}ms`);
-}).on('error', (err) => {
-  console.error('Server startup error:', err);
-  if (err.code === 'EADDRINUSE') {
-    console.error(`Port ${port} is already in use. Please free the port or choose another.`);
-  }
-  process.exit(1);
-});
-
-// Graceful shutdown
-process.on('SIGTERM', () => {
-  console.log('SIGTERM received. Shutting down gracefully...');
-  prisma.$disconnect().then(() => {
-    console.log('Prisma disconnected');
-  });
-  pool.end((err) => {
-    if (err) {
-      console.error('Error closing MySQL pool:', err);
-    } else {
-      console.log('MySQL pool closed');
-    }
-    if (puppeteerBrowser) {
-      puppeteerBrowser.close().then(() => {
-        console.log('Puppeteer browser closed');
-        process.exit(0);
-      });
-    } else {
-      process.exit(0);
-    }
-  });
-});
-
-process.on('SIGINT', () => {
-  console.log('SIGINT received. Shutting down gracefully...');
-  prisma.$disconnect().then(() => {
-    console.log('Prisma disconnected');
-  });
-  pool.end((err) => {
-    if (err) {
-      console.error('Error closing MySQL pool:', err);
-    } else {
-      console.log('MySQL pool closed');
-    }
-    if (puppeteerBrowser) {
-      puppeteerBrowser.close().then(() => {
-        console.log('Puppeteer browser closed');
-        process.exit(0);
-      });
-    } else {
-      process.exit(0);
-    }
-  });
-});
+    if (existing.length >
