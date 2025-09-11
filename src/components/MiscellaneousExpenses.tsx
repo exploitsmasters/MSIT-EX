@@ -28,6 +28,7 @@ interface ExpenseSummary {
   totalExpenses: number;
   totalAmount: number;
   averageAmount: number;
+  balanceImpactAmount: number;
 }
 
 interface Project {
@@ -75,7 +76,8 @@ function MiscellaneousExpenses() {
   const [summary, setSummary] = useState<ExpenseSummary>({
     totalExpenses: 0,
     totalAmount: 0,
-    averageAmount: 0
+    averageAmount: 0,
+    balanceImpactAmount: 0
   });
   const [categories, setCategories] = useState<string[]>([
     'مكتبية', 'صيانة', 'معدات', 'إيجار معدات', 'أدوات صيانه', 'مواصلات', 'اتصالات', 'كهرباء', 'مأكولات', 'أجور عمال', 'أخرى'
@@ -627,6 +629,20 @@ function MiscellaneousExpenses() {
             </div>
           </div>
         </div>
+        
+        <div className="bg-white p-6 rounded-lg shadow-sm border">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium text-gray-600">المصروفات المؤثرة على الرصيد</p>
+              <p className="text-2xl font-bold text-gray-900">{summary.balanceImpactAmount.toFixed(2)} ر.س</p>
+              <p className="text-xs text-gray-500 mt-1">مصروفات مباشرة فقط</p>
+            </div>
+            <div className="p-3 bg-orange-100 rounded-full">
+              <DollarSign className="h-6 w-6 text-orange-600" />
+            </div>
+          </div>
+        </div>
+        
         <div className="bg-white p-6 rounded-lg shadow-sm border">
           <div className="flex items-center justify-between">
             <div>
@@ -635,17 +651,6 @@ function MiscellaneousExpenses() {
             </div>
             <div className="p-3 bg-blue-100 rounded-full">
               <FileText className="h-6 w-6 text-blue-600" />
-            </div>
-          </div>
-        </div>
-        <div className="bg-white p-6 rounded-lg shadow-sm border">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium text-gray-600">متوسط المصروف</p>
-              <p className="text-2xl font-bold text-gray-900">{summary.averageAmount.toFixed(2)} ر.س</p>
-            </div>
-            <div className="p-3 bg-green-100 rounded-full">
-              <BarChart3 className="h-6 w-6 text-green-600" />
             </div>
           </div>
         </div>
@@ -771,6 +776,12 @@ function MiscellaneousExpenses() {
                           <div className="text-xs text-green-600 flex items-center gap-1">
                             <FileText className="h-3 w-3" />
                             مرفق
+                          </div>
+                        )}
+                        {expense.from_invoice_breakdown && (
+                          <div className="text-xs text-blue-600 flex items-center gap-1">
+                            <Package className="h-3 w-3" />
+                            من تفريغ فاتورة
                           </div>
                         )}
                         {expense.notes && (
