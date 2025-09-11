@@ -784,7 +784,7 @@ app.get('/api/purchases/:id/items', authenticateToken, async (req, res) => {
 
     // Fetch invoice items
     const [items] = await pool.execute(
-      `SELECT 
+      'SELECT * FROM purchase_invoice_items WHERE purchase_id = ? ORDER BY id',
         id,
         name,
         code,
@@ -893,12 +893,24 @@ app.post('/api/purchases/:id/items', authenticateToken, async (req, res) => {
       [id]
     );
 
+    // Get purchase details for expense creation
+    const [purchaseRows] = await pool.execute(
+      'SELECT supplier_name, project_id FROM purchases WHERE id = ? AND created_by = ?',
+      [id, req.user.id]
+    );
+
+    if (purchaseRows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Purchase not found' });
+    }
+
+    const purchase = purchaseRows[0];
+
     // Insert new items
     for (const item of items) {
       // Calculate values
-      const quantity = parseInt(item.quantity) || 1;
-      const priceBeforeVat = parseFloat(item.price_before_vat) || 0;
-      const vatRate = parseFloat(item.vat_rate) || 15;
+        `INSERT INTO purchase_invoice_items 
+         (purchase_id, name, code, quantity, price_before_vat, vat_rate, vat_amount, price_with_vat, total_amount, item_type) 
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       const vatAmount = (priceBeforeVat * vatRate) / 100;
       const priceWithVat = priceBeforeVat + vatAmount;
       const totalAmount = quantity * priceWithVat;
@@ -1228,9 +1240,29 @@ app.put('/api/purchases/:id', authenticateToken, upload.single('file'), async (r
           req.file.path,
           req.file.mimetype,
           req.file.size,
-          req.user.id,
+          item.total_amount,
+          item.item_type || 'purchase'
         ]
       );
+
+      // If item is marked as expense, create miscellaneous expense entry
+      if (item.item_type === 'expense') {
+        await pool.execute(
+          `INSERT INTO miscellaneous_expenses 
+           (description, amount, category, date, payment_method, notes, project_id, created_by, from_invoice_breakdown) 
+           VALUES (?, ?, ?, NOW(), ?, ?, ?, ?, ?)`,
+          [
+            `${item.name} - ${purchase.supplier_name}`,
+            item.total_amount,
+            'من تفريغ فاتورة',
+            'تحويل من فاتورة',
+            `تم تحويله من تفريغ فاتورة - الكود: ${item.code}`,
+            purchase.project_id,
+            req.user.id,
+            true
+          ]
+        );
+      }
     }
 
     await connection.commit();
@@ -1543,6 +1575,9 @@ app.get('/api/miscellaneous-expenses', authenticateToken, async (req, res) => {
     // Process file paths
     const processedExpenses = expenses.map(expense => {
       if (expense.file_path) {
+    const balanceImpactAmount = expenses
+      .filter(expense => !expense.from_invoice_breakdown)
+      .reduce((sum, expense) => sum + parseFloat(expense.amount), 0);
         const actualFileName = path.basename(expense.file_path);
         expense.file_url = `/uploads/${actualFileName}`;
       }
@@ -1613,7 +1648,8 @@ app.post('/api/miscellaneous-expenses', authenticateToken, upload.single('file')
       original_file_name: null,
       file_path: null,
       file_type: null,
-      file_size: null
+      averageAmount,
+      balanceImpactAmount
     };
 
     if (req.file) {
@@ -1627,7 +1663,7 @@ app.post('/api/miscellaneous-expenses', authenticateToken, upload.single('file')
 
     const [result] = await pool.execute(
       `INSERT INTO miscellaneous_expenses 
-       (user_id, description, amount, category, date, payment_method, notes, project_id, original_file_name, file_path, file_type, file_size, from_invoice_breakdown) 
+       (description, amount, category, date, payment_method, notes, project_id, created_by, original_file_name, file_path, file_type, file_url, from_invoice_breakdown) 
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         req.user.id, 
@@ -1641,7 +1677,8 @@ app.post('/api/miscellaneous-expenses', authenticateToken, upload.single('file')
         fileData.original_file_name,
         fileData.file_path,
         fileData.file_type,
-        fileData.file_size,
+        fileData?.file_url || null,
+        false
         false
       ]
     );
