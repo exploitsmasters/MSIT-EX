@@ -9,8 +9,7 @@ import {
   FileText, 
   Package,
   DollarSign,
-  Eye,
-  Edit
+  Eye
 } from 'lucide-react';
 import { toast, ToastContainer } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
@@ -26,6 +25,14 @@ interface InvoiceItem {
   price_with_vat: number;
   total_amount: number;
   item_type: 'purchase' | 'expense';
+  category?: string;
+  payment_method?: string;
+}
+
+interface SavedInvoiceItem {
+  id: number;
+  name: string;
+  item_type: 'purchase' | 'expense';
 }
 
 interface PurchaseInvoice {
@@ -35,6 +42,7 @@ interface PurchaseInvoice {
   vat_amount: number;
   supplier_name: string;
   project_name: string;
+  project_id: number;
   notes?: string;
   created_at: string;
   file_url?: string;
@@ -48,17 +56,27 @@ function InvoiceBreakdown() {
 
   const [invoice, setInvoice] = useState<PurchaseInvoice | null>(null);
   const [items, setItems] = useState<InvoiceItem[]>([]);
+  const [categories, setCategories] = useState<string[]>([
+    'مكتبية', 'صيانة', 'معدات', 'إيجار معدات', 'أدوات صيانه', 'مواصلات', 'اتصالات', 'كهرباء', 'مأكولات', 'أجور عمال', 'أخرى'
+  ]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [editingItemId, setEditingItemId] = useState<number | null>(null);
 
   const defaultVatRate = 15;
+  const paymentMethods = ['نقدي', 'تحويل بنكي', 'بطاقة ائتمان', 'شيك'];
 
   const getAuthHeaders = () => {
     const token = localStorage.getItem('token');
     return {
       'Authorization': `Bearer ${token}`,
       'Content-Type': 'application/json'
+    };
+  };
+
+  const getAuthHeadersMultipart = () => {
+    const token = localStorage.getItem('token');
+    return {
+      'Authorization': `Bearer ${token}`
     };
   };
 
@@ -78,7 +96,8 @@ function InvoiceBreakdown() {
         const invoiceData = {
           ...result.data,
           total_amount: parseFloat(result.data.total_amount) || 0,
-          vat_amount: parseFloat(result.data.vat_amount) || 0
+          vat_amount: parseFloat(result.data.vat_amount) || 0,
+          project_id: result.data.project_id
         };
         setInvoice(invoiceData);
       } else {
@@ -103,13 +122,18 @@ function InvoiceBreakdown() {
         const result = await response.json();
         if (result.success) {
           const processedItems = (result.data || []).map((item: any) => ({
-            ...item,
+            id: item.id,
+            name: item.name || '',
+            code: item.code || '',
             quantity: parseInt(item.quantity) || 0,
             price_before_vat: parseFloat(item.price_before_vat) || 0,
             vat_rate: parseFloat(item.vat_rate) || 0,
             vat_amount: parseFloat(item.vat_amount) || 0,
             price_with_vat: parseFloat(item.price_with_vat) || 0,
-            total_amount: parseFloat(item.total_amount) || 0
+            total_amount: parseFloat(item.total_amount) || 0,
+            item_type: item.item_type || 'purchase',
+            category: item.category || '',
+            payment_method: item.payment_method || ''
           }));
           setItems(processedItems);
         }
@@ -117,6 +141,23 @@ function InvoiceBreakdown() {
     } catch (error) {
       console.error('Error fetching invoice items:', error);
       toast.error('خطأ في جلب عناصر الفاتورة');
+    }
+  };
+
+  const fetchCategories = async () => {
+    try {
+      const response = await fetch('/api/miscellaneous-expenses/categories', {
+        headers: getAuthHeaders()
+      });
+
+      if (response.ok) {
+        const result = await response.json();
+        if (result.success && result.data.length > 0) {
+          setCategories(result.data);
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching categories:', error);
     }
   };
 
@@ -139,7 +180,9 @@ function InvoiceBreakdown() {
       vat_amount: Number(vatAmount.toFixed(2)),
       price_with_vat: Number(priceWithVat.toFixed(2)),
       total_amount: Number(totalAmount.toFixed(2)),
-      item_type: item.item_type || 'purchase'
+      item_type: item.item_type || 'purchase',
+      category: item.category || '',
+      payment_method: item.payment_method || ''
     };
   };
 
@@ -153,7 +196,9 @@ function InvoiceBreakdown() {
       vat_amount: 0,
       price_with_vat: 0,
       total_amount: 0,
-      item_type: 'purchase'
+      item_type: 'purchase',
+      category: '',
+      payment_method: ''
     };
     
     const calculatedItem = calculateItemTotals(newItem);
@@ -200,28 +245,103 @@ function InvoiceBreakdown() {
         return;
       }
 
-      const response = await fetch(`/api/purchases/${invoiceId}/items`, {
+      // Save all items to invoice_items
+      const invoiceResponse = await fetch(`/api/purchases/${invoiceId}/items`, {
         method: 'POST',
         headers: getAuthHeaders(),
         body: JSON.stringify({ items: validItems })
       });
 
-      const result = await response.json();
+      const invoiceResult = await invoiceResponse.json();
       
-      if (result.success) {
-        await fetch(`/api/purchases/${invoiceId}/update-totals`, {
-          method: 'POST',
-          headers: getAuthHeaders()
-        });
-        
-        toast.success('تم حفظ عناصر الفاتورة بنجاح');
-        fetchInvoiceItems();
-      } else {
-        toast.error(result.error || 'خطأ في حفظ العناصر');
+      if (!invoiceResult.success) {
+        console.error('Failed to save invoice items:', invoiceResult);
+        toast.error(invoiceResult.error || 'خطأ في حفظ عناصر الفاتورة');
+        return;
       }
+
+      console.log('Saved invoice items:', invoiceResult.data);
+
+      // Get the saved item IDs from the response
+      const savedItems: SavedInvoiceItem[] = invoiceResult.data;
+
+      // Save expense items to miscellaneous_expenses
+      const expenseItems = validItems.filter(item => item.item_type === 'expense');
+      if (expenseItems.length > 0 && invoice) {
+        const invoiceDate = invoice.created_at.split('T')[0];
+        
+        for (const expenseItem of expenseItems) {
+          const savedItem = savedItems.find(saved => saved.name === expenseItem.name && saved.item_type === 'expense');
+          const savedItemId = savedItem?.id;
+
+          if (!savedItemId) {
+            console.error('Saved item ID not found for expense:', expenseItem);
+            toast.error('لم يتم العثور على معرف العنصر المحفوظ');
+            continue;
+          }
+
+          // Check if expense already exists in miscellaneous_expenses
+          const checkResponse = await fetch(`/api/miscellaneous-expenses/check?invoice_item_id=${savedItemId}`, {
+            headers: getAuthHeaders()
+          });
+          const checkResult = await checkResponse.json();
+
+          console.log('Check expense response:', checkResult);
+
+          const formData = new FormData();
+          formData.append('description', expenseItem.name);
+          formData.append('amount', expenseItem.total_amount.toString());
+          formData.append('category', expenseItem.category || 'من فاتورة');
+          formData.append('date', invoiceDate);
+          formData.append('payment_method', expenseItem.payment_method || 'غير محدد');
+          formData.append('project_id', invoice.project_id.toString());
+          formData.append('from_invoice_breakdown', '1');
+          formData.append('invoice_item_id', savedItemId.toString());
+
+          if (checkResult.exists) {
+            // Update existing expense
+            console.log('Updating expense for invoice_item_id:', savedItemId);
+            const expenseResponse = await fetch(`/api/miscellaneous-expenses/${checkResult.expense_id}`, {
+              method: 'PUT',
+              headers: getAuthHeadersMultipart(),
+              body: formData
+            });
+
+            const expenseResult = await expenseResponse.json();
+            console.log('Update expense response:', expenseResult);
+
+            if (!expenseResult.success) {
+              console.error('Failed to update expense:', expenseResult);
+              toast.error(expenseResult.error || 'خطأ في تحديث المصروف');
+              continue;
+            }
+          } else {
+            // Add new expense
+            console.log('Creating new expense for invoice_item_id:', savedItemId);
+            const expenseResponse = await fetch('/api/miscellaneous-expenses', {
+              method: 'POST',
+              headers: getAuthHeadersMultipart(),
+              body: formData
+            });
+
+            const expenseResult = await expenseResponse.json();
+            console.log('Create expense response:', expenseResult);
+
+            if (!expenseResult.success) {
+              console.error('Failed to create expense:', expenseResult);
+              toast.error(expenseResult.error || 'خطأ في حفظ المصروف');
+              continue;
+            }
+          }
+        }
+      }
+
+      toast.success('تم حفظ عناصر الفاتورة والمصروفات بنجاح');
+      await fetchInvoiceItems();
+      await fetchInvoiceDetails(); // Refresh invoice totals
     } catch (error) {
       console.error('Error saving items:', error);
-      toast.error('خطأ في حفظ العناصر');
+      toast.error(`خطأ في حفظ العناصر أو المصروفات: ${error.message}`);
     } finally {
       setSaving(false);
     }
@@ -264,6 +384,7 @@ function InvoiceBreakdown() {
     if (invoiceId) {
       fetchInvoiceDetails();
       fetchInvoiceItems();
+      fetchCategories();
     }
   }, [invoiceId]);
 
@@ -328,11 +449,11 @@ function InvoiceBreakdown() {
           </div>
           <div>
             <p className="text-sm font-medium text-gray-600">المورد</p>
-            <p className="text-lg font-bold text-gray-900">{invoice.supplier_name}</p>
+            <p className="text-lg font-bold text-gray-900">{invoice.supplier_name || 'غير محدد'}</p>
           </div>
           <div>
             <p className="text-sm font-medium text-gray-600">المشروع</p>
-            <p className="text-lg font-bold text-gray-900">{invoice.project_name}</p>
+            <p className="text-lg font-bold text-gray-900">{invoice.project_name || 'غير محدد'}</p>
           </div>
           <div>
             <p className="text-sm font-medium text-gray-600">إجمالي الفاتورة</p>
@@ -393,6 +514,12 @@ function InvoiceBreakdown() {
                 </th>
                 <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
                   نوع العنصر
+                </th>
+                <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  الفئة
+                </th>
+                <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  طريقة الدفع
                 </th>
                 <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
                   الإجراءات
@@ -462,13 +589,45 @@ function InvoiceBreakdown() {
                   </td>
                   <td className="px-4 py-3">
                     <select
-                      value={item.item_type}
+                      value={item.item_type || 'purchase'}
                       onChange={(e) => updateItem(index, 'item_type', e.target.value as 'purchase' | 'expense')}
                       className="w-full px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-[#4A3B85] focus:border-transparent text-sm"
                     >
                       <option value="purchase">عنصر شراء</option>
                       <option value="expense">مصروف</option>
                     </select>
+                  </td>
+                  <td className="px-4 py-3">
+                    {item.item_type === 'expense' ? (
+                      <select
+                        value={item.category || ''}
+                        onChange={(e) => updateItem(index, 'category', e.target.value)}
+                        className="w-full px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-[#4A3B85] focus:border-transparent text-sm"
+                      >
+                        <option value="">اختر الفئة</option>
+                        {categories.map(category => (
+                          <option key={category} value={category}>{category}</option>
+                        ))}
+                      </select>
+                    ) : (
+                      <span className="text-gray-500">-</span>
+                    )}
+                  </td>
+                  <td className="px-4 py-3">
+                    {item.item_type === 'expense' ? (
+                      <select
+                        value={item.payment_method || ''}
+                        onChange={(e) => updateItem(index, 'payment_method', e.target.value)}
+                        className="w-full px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-[#4A3B85] focus:border-transparent text-sm"
+                      >
+                        <option value="">اختر طريقة الدفع</option>
+                        {paymentMethods.map(method => (
+                          <option key={method} value={method}>{method}</option>
+                        ))}
+                      </select>
+                    ) : (
+                      <span className="text-gray-500">-</span>
+                    )}
                   </td>
                   <td className="px-4 py-3">
                     <button
@@ -483,7 +642,7 @@ function InvoiceBreakdown() {
               
               {items.length === 0 && (
                 <tr>
-                  <td colSpan={10} className="px-4 py-8 text-center text-gray-500">
+                  <td colSpan={12} className="px-4 py-8 text-center text-gray-500">
                     <Package className="h-12 w-12 text-gray-400 mx-auto mb-4" />
                     <p>لا توجد عناصر في الفاتورة</p>
                     <button
