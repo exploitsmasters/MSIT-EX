@@ -190,7 +190,7 @@ function MiscellaneousExpenses() {
       if (endDate) params.append('endDate', endDate);
       if (selectedProject) params.append('projectId', selectedProject);
 
-      const response = await fetch(`/api/miscellaneous-expenses?${params}`, {
+      const response = await fetch(`/api/miscellaneous-expenses?${params}&_t=${Date.now()}`, {
         headers: getAuthHeaders()
       });
 
@@ -199,6 +199,8 @@ function MiscellaneousExpenses() {
       }
 
       const result = await response.json();
+      console.log('Fetched expenses result:', result);
+      
       if (result.success) {
         const processedExpenses = result.data.map((expense: any) => ({
           ...expense,
@@ -206,7 +208,17 @@ function MiscellaneousExpenses() {
         }));
         
         setExpenses(processedExpenses);
-        setSummary(result.summary);
+        
+        // Ensure summary is properly set with correct values
+        const summaryData = {
+          totalExpenses: result.summary?.totalExpenses || 0,
+          totalAmount: parseFloat(result.summary?.totalAmount) || 0,
+          averageAmount: parseFloat(result.summary?.averageAmount) || 0,
+          balanceImpactAmount: parseFloat(result.summary?.balanceImpactAmount) || 0
+        };
+        
+        console.log('Setting summary:', summaryData);
+        setSummary(summaryData);
       } else {
         throw new Error(result.error);
       }
@@ -558,7 +570,8 @@ function MiscellaneousExpenses() {
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm font-medium text-gray-600">إجمالي المصروفات</p>
-              <p className="text-2xl font-bold text-gray-900">{summary?.totalAmount?.toFixed(2) || '0.00'} ر.س</p>
+              <p className="text-2xl font-bold text-gray-900">{(summary?.totalAmount || 0).toFixed(2)} ر.س</p>
+              <p className="text-xs text-gray-500 mt-1">عدد المصروفات: {summary?.totalExpenses || 0}</p>
             </div>
             <div className="p-3 bg-red-100 rounded-full">
               <DollarSign className="h-6 w-6 text-red-600" />
@@ -570,7 +583,8 @@ function MiscellaneousExpenses() {
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm font-medium text-gray-600">المصروفات المؤثرة على الرصيد</p>
-              <p className="text-2xl font-bold text-gray-900">{summary?.balanceImpactAmount?.toFixed(2) || '0.00'} ر.س</p>
+              <p className="text-2xl font-bold text-gray-900">{(summary?.balanceImpactAmount || 0).toFixed(2)} ر.س</p>
+              <p className="text-xs text-gray-500 mt-1">مصروفات مستقلة فقط</p>
             </div>
             <div className="p-3 bg-blue-100 rounded-full">
               <DollarSign className="h-6 w-6 text-blue-600" />
@@ -582,7 +596,7 @@ function MiscellaneousExpenses() {
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm font-medium text-gray-600">متوسط المصروفات</p>
-              <p className="text-2xl font-bold text-gray-900">{summary?.averageAmount?.toFixed(2) || '0.00'} ر.س</p>
+              <p className="text-2xl font-bold text-gray-900">{(summary?.averageAmount || 0).toFixed(2)} ر.س</p>
             </div>
             <div className="p-3 bg-purple-100 rounded-full">
               <BarChart3 className="h-6 w-6 text-purple-600" />
@@ -722,7 +736,7 @@ function MiscellaneousExpenses() {
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <span className="text-sm font-medium text-gray-900">
-                        {expense.amount.toFixed(2)} ر.س
+                        {parseFloat(expense.amount).toFixed(2)} ر.س
                       </span>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
