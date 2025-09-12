@@ -45,6 +45,9 @@ app.get('/api/miscellaneous-expenses', authenticateToken, async (req, res) => {
     query += ' ORDER BY me.date DESC, me.created_at DESC';
 
     const [expenses] = await pool.execute(query, queryParams);
+  }
+}
+)
 
 -    // Calculate summary: total count and sum of amount for all expenses
 +    // Calculate summary: total count and sum of amount for all expenses (with proper DECIMAL casting)
@@ -57,6 +60,7 @@ app.get('/api/miscellaneous-expenses', authenticateToken, async (req, res) => {
 +        COALESCE(AVG(CAST(amount AS DECIMAL(15,2))), 0.00) as averageAmount
        FROM miscellaneous_expenses
 -      WHERE user_id = ?`,
+     )
 -      [req.user.id]
 +      WHERE user_id = ? ${category ? 'AND category = ?' : ''} ${search ? 'AND (description LIKE ? OR notes LIKE ?)' : ''} ${startDate ? 'AND date >= ?' : ''} ${endDate ? 'AND date <= ?' : ''} ${projectId ? 'AND project_id = ?' : ''}`,
 +      queryParams
@@ -65,7 +69,7 @@ app.get('/api/miscellaneous-expenses', authenticateToken, async (req, res) => {
 -    // Calculate balance impact: sum of non-invoice expenses
 +    // Calculate balance impact: sum of non-invoice expenses (with proper DECIMAL casting)
      const [summaryBalanceImpact] = await pool.execute(
--      `SELECT COALESCE(SUM(CAST(amount AS DECIMAL(10,2))), 0) as balanceImpactAmount
+-      \`SELECT COALESCE(SUM(CAST(amount AS DECIMAL(10,2))), 0) as balanceImpactAmount
 +      `SELECT COALESCE(SUM(CAST(amount AS DECIMAL(15,2))), 0.00) as balanceImpactAmount
         FROM miscellaneous_expenses
 -       WHERE user_id = ? AND from_invoice_breakdown = 0`,
@@ -76,7 +80,7 @@ app.get('/api/miscellaneous-expenses', authenticateToken, async (req, res) => {
 
 -    // Debug query to fetch raw amounts
 -    const [rawAmounts] = await pool.execute(
--      `SELECT id, description, amount, CAST(amount AS DECIMAL(10,2)) as cast_amount
+-      \`SELECT id, description, amount, CAST(amount AS DECIMAL(10,2)) as cast_amount
 -       FROM miscellaneous_expenses
 -       WHERE user_id = ?`,
 -      [req.user.id]
