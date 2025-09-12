@@ -22,13 +22,13 @@ interface Expense {
   file_path?: string;
   file_type?: string;
   file_url?: string;
+  from_invoice_breakdown: number;
 }
 
 interface ExpenseSummary {
   totalExpenses: number;
   totalAmount: number;
   averageAmount: number;
-  balanceImpactAmount: number;
   balanceImpactAmount: number;
 }
 
@@ -78,7 +78,6 @@ function MiscellaneousExpenses() {
     totalExpenses: 0,
     totalAmount: 0,
     averageAmount: 0,
-    balanceImpactAmount: 0
     balanceImpactAmount: 0
   });
   const [categories, setCategories] = useState<string[]>([
@@ -220,22 +219,21 @@ function MiscellaneousExpenses() {
   };
 
   const fetchCategories = async () => {
-    try {
-      const response = await fetch('/api/miscellaneous-expenses/categories', {
-        headers: getAuthHeaders()
-      });
-
-      if (response.ok) {
-        const result = await response.json();
-        if (result.success && result.data.length > 0) {
-          setCategories(result.data);
-        }
-      }
-    } catch (error) {
-      console.error('Error fetching categories:', error);
-      alert('خطأ في جلب الفئات');
+  try {
+    const response = await fetch('/api/miscellaneous-expenses/categories', {
+      headers: getAuthHeaders()
+    });
+    const result = await response.json();
+    if (result.success && result.data.length > 0) {
+      setCategories(result.data);
+    } else {
+      console.warn('Categories endpoint returned empty or invalid data, using defaults');
     }
-  };
+  } catch (error) {
+    console.error('Error fetching categories:', error);
+    console.warn('Using default categories due to error');
+  }
+};
 
   // File upload handlers (copied from Purchases.tsx)
   const capture = useCallback(() => {
@@ -325,93 +323,73 @@ function MiscellaneousExpenses() {
         body: formDataToSend
       });
 
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`HTTP ${response.status}: ${errorText}`);
+      }
+
       const result = await response.json();
       
-      if (result.success) {
-        alert(result.message);
-        resetForm();
-        fetchExpenses();
-        fetchCategories();
-      } else {
-        alert(result.error);
-      }
+      toast.success(result.message || 'تم حفظ المصروف بنجاح');
+      resetForm();
+      fetchExpenses();
     } catch (error) {
       console.error('Error saving expense:', error);
-      alert('خطأ في حفظ المصروف');
+      toast.error(`خطأ في حفظ المصروف: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   };
 
-  const handleDelete = async (id: number) => {
-    setDeleteExpenseId(id);
-    setIsBulkDelete(false);
-    setShowDeleteModal(true);
-  };
-
-  const handleBulkDelete = async () => {
-    if (selectedRows.length === 0) {
-      alert('يرجى تحديد مصروف واحد على الأقل لحذفه');
-      return;
-    }
-
-    setIsBulkDelete(true);
-    setShowDeleteModal(true);
-  };
-
-  const handleDeleteConfirm = async () => {
+  const handleDeleteConfirm = () => {
     if (isBulkDelete) {
-      try {
-        const deletePromises = selectedRows.map(id =>
-          fetch(`/api/miscellaneous-expenses/${id}`, {
-            method: 'DELETE',
-            headers: getAuthHeaders()
-          }).then(response => {
-            if (!response.ok) {
-              return response.json().then(data => {
-                throw new Error(data.error || 'فشل في حذف المصروف');
-              });
-            }
-            return id;
-          })
-        );
-
-        const deletedIds = await Promise.all(deletePromises);
-        setExpenses(expenses.filter(expense => !deletedIds.includes(expense.id)));
-        setSelectedRows([]);
-        alert('تم حذف المصروفات المحددة بنجاح');
-      } catch (error) {
-        console.error('Error deleting expenses:', error);
-        alert('خطأ في حذف المصروفات');
-      }
-    } else if (deleteExpenseId !== null) {
-      try {
-        const response = await fetch(`/api/miscellaneous-expenses/${deleteExpenseId}`, {
-          method: 'DELETE',
-          headers: getAuthHeaders()
-        });
-
-        const result = await response.json();
-        
-        if (result.success) {
-          alert(result.message);
-          setExpenses(expenses.filter(expense => expense.id !== deleteExpenseId));
-          setSelectedRows(selectedRows.filter(rowId => rowId !== deleteExpenseId));
-        } else {
-          alert(result.error);
-        }
-      } catch (error) {
-        console.error('Error deleting expense:', error);
-        alert('خطأ في حذف المصروف');
-      }
+      handleBulkDelete();
+    } else if (deleteExpenseId) {
+      handleDelete(deleteExpenseId);
     }
     setShowDeleteModal(false);
-    setDeleteExpenseId(null);
-    setIsBulkDelete(false);
   };
 
   const handleDeleteCancel = () => {
     setShowDeleteModal(false);
     setDeleteExpenseId(null);
     setIsBulkDelete(false);
+  };
+
+  const handleDelete = async (id: number) => {
+    try {
+      const response = await fetch(`/api/miscellaneous-expenses/${id}`, {
+        method: 'DELETE',
+        headers: getAuthHeaders()
+      });
+
+      const result = await response.json();
+      
+      if (response.ok) {
+        toast.success(result.message);
+        fetchExpenses();
+      } else {
+        toast.error(result.error);
+      }
+    } catch (error) {
+      console.error('Error deleting expense:', error);
+      toast.error('خطأ في حذف المصروف');
+    }
+  };
+
+  const handleBulkDelete = async () => {
+    try {
+      for (const id of selectedRows) {
+        await fetch(`/api/miscellaneous-expenses/${id}`, {
+          method: 'DELETE',
+          headers: getAuthHeaders()
+        });
+      }
+      toast.success('تم حذف المصروفات المحددة بنجاح');
+      setSelectedRows([]);
+      fetchExpenses();
+    } catch (error) {
+      console.error('Error bulk deleting expenses:', error);
+      toast.error('خطأ في حذف المصروفات');
+    }
   };
 
   const resetForm = () => {
@@ -443,14 +421,22 @@ function MiscellaneousExpenses() {
       notes: expense.notes || '',
       project_id: expense.project_id?.toString() || ''
     });
-    
-    // Reset file states when editing
-    setSelectedFile(null);
-    setUploadPreview(null);
-    setCapturedImage(null);
-    setScannedDocument(null);
-    
+    setUploadPreview(expense.file_url || null);
     setIsModalOpen(true);
+  };
+
+  const toggleRowSelection = (id: number) => {
+    setSelectedRows(prev =>
+      prev.includes(id) ? prev.filter(rowId => rowId !== id) : [...prev, id]
+    );
+  };
+
+  const toggleAllRows = () => {
+    if (selectedRows.length === expenses.length) {
+      setSelectedRows([]);
+    } else {
+      setSelectedRows(expenses.map(exp => exp.id));
+    }
   };
 
   const clearFilters = () => {
@@ -459,25 +445,15 @@ function MiscellaneousExpenses() {
     setSelectedProject('');
     setStartDate('');
     setEndDate('');
-    setSelectedRows([]);
   };
 
   const handleProjectClick = (projectId: number, projectName: string) => {
     navigate(`/dashboard/project-expenses/${projectId}`, { 
-      state: { projectName } 
+      state: { 
+        projectName, 
+        fromProjectView: true 
+      } 
     });
-  };
-
-  const handleRowSelect = (id: number) => {
-    setSelectedRows(prev =>
-      prev.includes(id) ? prev.filter(rowId => rowId !== id) : [...prev, id]
-    );
-  };
-
-  const handleSelectAll = () => {
-    setSelectedRows(
-      selectedRows.length === expenses.length ? [] : expenses.map(expense => expense.id)
-    );
   };
 
   const getProjectsWithExpenses = () => {
@@ -494,7 +470,7 @@ function MiscellaneousExpenses() {
           });
         }
         const project = projectMap.get(expense.project_id);
-        project.totalAmount += parseFloat(expense.amount.toString());
+        project.totalAmount += expense.amount;
         project.expenseCount += 1;
       }
     });
@@ -503,9 +479,8 @@ function MiscellaneousExpenses() {
   };
 
   useEffect(() => {
-    console.log('Component mounted, fetching data...');
-    fetchProjects();
     fetchExpenses();
+    fetchProjects();
     fetchCategories();
   }, [selectedCategory, searchTerm, startDate, endDate, selectedProject]);
 
@@ -528,6 +503,7 @@ function MiscellaneousExpenses() {
             </div>
           </div>
         </div>
+
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {projectsWithExpenses.map((project) => (
             <div
@@ -536,79 +512,36 @@ function MiscellaneousExpenses() {
               className="bg-white p-6 rounded-lg shadow-sm border hover:shadow-md transition-shadow duration-200 cursor-pointer"
             >
               <div className="flex items-center justify-between mb-4">
-                <div className="p-3 bg-blue-100 rounded-full">
-                  <Building2 className="h-6 w-6 text-blue-600" />
+                <div className="p-3 bg-red-100 rounded-full">
+                  <Building2 className="h-6 w-6 text-red-600" />
                 </div>
                 <span className="text-sm text-gray-500">{project.expenseCount} مصروف</span>
               </div>
               <h3 className="text-lg font-semibold text-gray-900 mb-2">{project.name}</h3>
-              <p className="text-2xl font-bold text-blue-600">{project.totalAmount.toFixed(2)} ر.س</p>
+              <p className="text-2xl font-bold text-red-600">{project.totalAmount.toFixed(2)} ر.س</p>
               <p className="text-sm text-gray-500 mt-1">إجمالي المصروفات</p>
             </div>
           ))}
-          {expenses.some(expense => !expense.project_id) && (
-            <div
-              onClick={() => navigate('/dashboard/unassigned-expenses')}
-              className="bg-white p-6 rounded-lg shadow-sm border hover:shadow-md transition-shadow duration-200 cursor-pointer"
-            >
-              <div className="flex items-center justify-between mb-4">
-                <div className="p-3 bg-gray-100 rounded-full">
-                  <FileText className="h-6 w-6 text-gray-600" />
-                </div>
-                <span className="text-sm text-gray-500">
-                  {expenses.filter(e => !e.project_id).length} مصروف
-                </span>
-              </div>
-              <h3 className="text-lg font-semibold text-gray-900 mb-2">مصروفات غير مخصصة</h3>
-              <p className="text-2xl font-bold text-gray-600">
-                {expenses
-                  .filter(e => !e.project_id)
-                  .reduce((sum, e) => sum + parseFloat(e.amount.toString()), 0)
-                  .toFixed(2)} ر.س
-              </p>
-              <p className="text-sm text-gray-500 mt-1">مصروفات بدون مشروع</p>
-            </div>
-          )}
         </div>
-        <ToastContainer
-          position="top-right"
-          autoClose={3000}
-          hideProgressBar={false}
-          newestOnTop
-          closeOnClick
-          rtl={true}
-          pauseOnFocusLoss
-          draggable
-          pauseOnHover
-          theme="light"
-        />
       </div>
     );
   }
 
   return (
     <div className="space-y-6">
+      <ToastContainer position="top-right" autoClose={3000} hideProgressBar={false} closeOnClick rtl />
       <div className="flex justify-between items-center">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">المصروفات المتفرقة</h1>
-          <p className="text-gray-600 mt-1">إدارة المصروفات العامة والمتنوعة</p>
+          <p className="text-gray-600 mt-1">إدارة المصروفات اليومية والمتفرقة</p>
         </div>
         <div className="flex gap-3">
-          {selectedRows.length > 0 && (
-            <button
-              onClick={handleBulkDelete}
-              className="flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors duration-200"
-            >
-              <Trash2 className="h-4 w-4" />
-              حذف المصروفات المحددة
-            </button>
-          )}
           <button
             onClick={() => setShowProjectView(true)}
             className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors duration-200 flex items-center gap-2"
           >
             <Building2 className="h-4 w-4" />
-            عرض حسب المشروع
+            تصنيف بحسب المشروع
           </button>
           <button
             onClick={() => setIsModalOpen(true)}
@@ -619,49 +552,47 @@ function MiscellaneousExpenses() {
           </button>
         </div>
       </div>
+
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         <div className="bg-white p-6 rounded-lg shadow-sm border">
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm font-medium text-gray-600">إجمالي المصروفات</p>
-              <p className="text-2xl font-bold text-gray-900">{summary.totalAmount.toFixed(2)} ر.س</p>
+              <p className="text-2xl font-bold text-gray-900">{summary?.totalAmount?.toFixed(2) || '0.00'} ر.س</p>
             </div>
             <div className="p-3 bg-red-100 rounded-full">
               <DollarSign className="h-6 w-6 text-red-600" />
             </div>
           </div>
         </div>
-        
+
         <div className="bg-white p-6 rounded-lg shadow-sm border">
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm font-medium text-gray-600">المصروفات المؤثرة على الرصيد</p>
-              <p className="text-2xl font-bold text-gray-900">{summary.balanceImpactAmount.toFixed(2)} ر.س</p>
-              <p className="text-xs text-gray-500 mt-1">مصروفات مباشرة فقط</p>
+              <p className="text-2xl font-bold text-gray-900">{summary?.balanceImpactAmount?.toFixed(2) || '0.00'} ر.س</p>
             </div>
-            <div className="p-3 bg-orange-100 rounded-full">
-              <DollarSign className="h-6 w-6 text-orange-600" />
+            <div className="p-3 bg-blue-100 rounded-full">
+              <DollarSign className="h-6 w-6 text-blue-600" />
             </div>
           </div>
         </div>
-        
-        
+
         <div className="bg-white p-6 rounded-lg shadow-sm border">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm font-medium text-gray-600">المصروفات المؤثرة على الرصيد</p>
-              <p className="text-2xl font-bold text-gray-900">{summary.balanceImpactAmount.toFixed(2)} ر.س</p>
-              <p className="text-xs text-gray-500 mt-1">مصروفات مباشرة فقط</p>
+              <p className="text-sm font-medium text-gray-600">متوسط المصروفات</p>
+              <p className="text-2xl font-bold text-gray-900">{summary?.averageAmount?.toFixed(2) || '0.00'} ر.س</p>
             </div>
-            <div className="p-3 bg-orange-100 rounded-full">
-              <DollarSign className="h-6 w-6 text-orange-600" />
+            <div className="p-3 bg-purple-100 rounded-full">
+              <BarChart3 className="h-6 w-6 text-purple-600" />
             </div>
           </div>
         </div>
-        
       </div>
+
       <div className="bg-white p-4 rounded-lg shadow-sm border">
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
           <div className="relative">
             <Search className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
             <input
@@ -672,6 +603,7 @@ function MiscellaneousExpenses() {
               className="w-full pr-10 pl-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#4A3B85] focus:border-transparent"
             />
           </div>
+          
           <select
             value={selectedCategory}
             onChange={(e) => setSelectedCategory(e.target.value)}
@@ -682,17 +614,18 @@ function MiscellaneousExpenses() {
               <option key={category} value={category}>{category}</option>
             ))}
           </select>
+
           <select
             value={selectedProject}
             onChange={(e) => setSelectedProject(e.target.value)}
             className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#4A3B85] focus:border-transparent"
           >
             <option value="">جميع المشاريع</option>
-            <option value="unassigned">غير مخصص لمشروع</option>
             {projects.map(project => (
               <option key={project.id} value={project.id}>{project.name}</option>
             ))}
           </select>
+
           <input
             type="date"
             value={startDate}
@@ -700,6 +633,7 @@ function MiscellaneousExpenses() {
             className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#4A3B85] focus:border-transparent"
             placeholder="من تاريخ"
           />
+
           <input
             type="date"
             value={endDate}
@@ -707,6 +641,7 @@ function MiscellaneousExpenses() {
             className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#4A3B85] focus:border-transparent"
             placeholder="إلى تاريخ"
           />
+
           <button
             onClick={clearFilters}
             className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors duration-200"
@@ -715,6 +650,7 @@ function MiscellaneousExpenses() {
           </button>
         </div>
       </div>
+
       <div className="bg-white rounded-lg shadow-sm border overflow-hidden">
         {loading ? (
           <div className="p-8 text-center">
@@ -723,7 +659,7 @@ function MiscellaneousExpenses() {
           </div>
         ) : expenses.length === 0 ? (
           <div className="p-8 text-center">
-            <FileText className="h-12 w-12 text-gray-400 mx-auto mb-4" />
+            <DollarSign className="h-12 w-12 text-gray-400 mx-auto mb-4" />
             <h3 className="text-lg font-medium text-gray-900 mb-2">لا توجد مصروفات</h3>
             <p className="text-gray-500">لم يتم العثور على مصروفات تطابق المعايير المحددة</p>
           </div>
@@ -732,12 +668,12 @@ function MiscellaneousExpenses() {
             <table className="min-w-full divide-y divide-gray-200">
               <thead className="bg-gray-50">
                 <tr>
-                  <th className="w-12 px-6 py-3">
+                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
                     <input
                       type="checkbox"
-                      className="form-checkbox h-4 w-4 text-[#4A3B85] rounded border-gray-300 focus:ring-[#4A3B85]"
-                      checked={selectedRows.length === expenses.length && expenses.length > 0}
-                      onChange={handleSelectAll}
+                      checked={selectedRows.length === expenses.length}
+                      onChange={toggleAllRows}
+                      className="rounded border-gray-300 text-[#4A3B85] focus:ring-[#4A3B85]"
                     />
                   </th>
                   <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -750,13 +686,13 @@ function MiscellaneousExpenses() {
                     الفئة
                   </th>
                   <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    المشروع
-                  </th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
                     التاريخ
                   </th>
                   <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
                     طريقة الدفع
+                  </th>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    المشروع
                   </th>
                   <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
                     الإجراءات
@@ -766,43 +702,27 @@ function MiscellaneousExpenses() {
               <tbody className="bg-white divide-y divide-gray-200">
                 {expenses.map((expense) => (
                   <tr key={expense.id} className="hover:bg-gray-50">
-                    <td className="px-6 py-4">
+                    <td className="px-6 py-4 whitespace-nowrap">
                       <input
                         type="checkbox"
-                        className="form-checkbox h-4 w-4 text-[#4A3B85] rounded border-gray-300 focus:ring-[#4A3B85]"
                         checked={selectedRows.includes(expense.id)}
-                        onChange={() => handleRowSelect(expense.id)}
+                        onChange={() => toggleRowSelection(expense.id)}
+                        className="rounded border-gray-300 text-[#4A3B85] focus:ring-[#4A3B85]"
                       />
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
-                      <div>
-                        <div className="text-sm font-medium text-gray-900">{expense.description}</div>
-                        {expense.original_file_name && (
-                          <div className="text-xs text-green-600 flex items-center gap-1">
-                            <FileText className="h-3 w-3" />
-                            مرفق
-                          </div>
-                        )}
-                        {expense.from_invoice_breakdown && (
-                          <div className="text-xs text-blue-600 flex items-center gap-1">
-                            <Package className="h-3 w-3" />
+                      <div className="text-sm text-gray-900">
+                        {expense.description}
+                        {expense.from_invoice_breakdown === 1 && (
+                          <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
                             من تفريغ فاتورة
-                          </div>
-                        )}
-                        {expense.from_invoice_breakdown && (
-                          <div className="text-xs text-blue-600 flex items-center gap-1">
-                            <Package className="h-3 w-3" />
-                            من تفريغ فاتورة
-                          </div>
-                        )}
-                        {expense.notes && (
-                          <div className="text-sm text-gray-500">{expense.notes}</div>
+                          </span>
                         )}
                       </div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <span className="text-sm font-medium text-gray-900">
-                        {parseFloat(expense.amount.toString()).toFixed(2)} ر.س
+                        {expense.amount.toFixed(2)} ر.س
                       </span>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
@@ -810,20 +730,22 @@ function MiscellaneousExpenses() {
                         {expense.category}
                       </span>
                     </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                      {new Date(expense.date).toLocaleDateString('ar-SA')}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <span className="inline-flex px-2 py-1 text-xs font-semibold rounded-full bg-green-100 text-green-800">
+                        {expense.payment_method}
+                      </span>
+                    </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       {expense.project_name ? (
-                        <span className="inline-flex px-2 py-1 text-xs font-semibold rounded-full bg-green-100 text-green-800">
+                        <span className="inline-flex px-2 py-1 text-xs font-semibold rounded-full bg-purple-100 text-purple-800">
                           {expense.project_name}
                         </span>
                       ) : (
                         <span className="text-sm text-gray-400">غير مخصص</span>
                       )}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                      {new Date(expense.date).toLocaleDateString('en-GB')}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                      {expense.payment_method}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
                       <div className="flex space-x-2">
@@ -843,7 +765,11 @@ function MiscellaneousExpenses() {
                           <Edit className="h-4 w-4" />
                         </button>
                         <button
-                          onClick={() => handleDelete(expense.id)}
+                          onClick={() => {
+                            setDeleteExpenseId(expense.id);
+                            setIsBulkDelete(false);
+                            setShowDeleteModal(true);
+                          }}
                           className="text-red-600 hover:text-red-900"
                         >
                           <Trash2 className="h-4 w-4" />
@@ -857,9 +783,9 @@ function MiscellaneousExpenses() {
           </div>
         )}
       </div>
-      {isModalOpen && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 overflow-y-auto">
 
+      {isModalOpen && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-lg p-6 w-full max-w-md mx-4">
             <h2 className="text-xl font-bold text-gray-900 mb-4">
               {editingExpense ? 'تعديل المصروف' : 'إضافة مصروف جديد'}
