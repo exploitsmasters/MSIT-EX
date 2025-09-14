@@ -61,6 +61,12 @@ interface PurchaseSummary {
   totalVat: number;
 }
 
+interface PaginationInfo {
+  total: number;
+  pages: number;
+  currentPage: number;
+  limit: number;
+}
 interface Project {
   id: number;
   name: string;
@@ -94,6 +100,12 @@ function Purchases() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [projectMissions, setProjectMissions] = useState<ProjectMission[]>([]);
+  const [pagination, setPagination] = useState<PaginationInfo>({
+    total: 0,
+    pages: 0,
+    currentPage: 1,
+    limit: 10
+  });
   const [summary, setSummary] = useState<PurchaseSummary>({
     totalPurchases: 0,
     totalAmount: 0,
@@ -109,6 +121,8 @@ function Purchases() {
   const [selectedProject, setSelectedProject] = useState('');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(10);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   
@@ -167,6 +181,8 @@ function Purchases() {
     try {
       setLoading(true);
       const params = new URLSearchParams();
+      params.append('page', currentPage.toString());
+      params.append('limit', itemsPerPage.toString());
       if (searchTerm) params.append('search', searchTerm);
       if (selectedProject) params.append('projectId', selectedProject);
       if (startDate) params.append('startDate', startDate);
@@ -181,7 +197,7 @@ function Purchases() {
       }
 
       const result = await response.json();
-      if (result.success && result.purchases) {
+      if (result.success && result.purchases && result.pagination) {
         const processedPurchases = result.purchases.map((purchase: any) => ({
           ...purchase,
           total_amount: parseFloat(purchase.total_amount) || 0,
@@ -192,21 +208,10 @@ function Purchases() {
         }));
         
         setPurchases(processedPurchases);
-        const totalVat = processedPurchases.reduce((sum: number, purchase: Purchase) => 
-          sum + purchase.breakdown_total_vat, 0);
-        const totalAmount = processedPurchases.reduce((sum: number, purchase: Purchase) => 
-          sum + (purchase.breakdown_total_with_vat > 0 ? purchase.breakdown_total_with_vat : purchase.total_amount), 0);
+        setPagination(result.pagination);
         
-        const totalAmountBeforeVat = processedPurchases.reduce((sum: number, purchase: Purchase) => 
-          sum + purchase.breakdown_total_before_vat, 0);
-        
-        setSummary({
-          totalPurchases: processedPurchases.length,
-          totalAmount,
-          totalVat,
-          totalAmountBeforeVat,
-          averageAmount: processedPurchases.length > 0 ? totalAmount / processedPurchases.length : 0
-        });
+        // Fetch summary separately to get totals for all purchases, not just current page
+        await fetchPurchasesSummary();
       }
     } catch (error) {
       console.error('Error fetching purchases:', error);
@@ -216,6 +221,55 @@ function Purchases() {
     }
   };
 
+  const fetchPurchasesSummary = async () => {
+    try {
+      const params = new URLSearchParams();
+      params.append('limit', 'all'); // Get all purchases for summary calculation
+      if (searchTerm) params.append('search', searchTerm);
+      if (selectedProject) params.append('projectId', selectedProject);
+      if (startDate) params.append('startDate', startDate);
+      if (endDate) params.append('endDate', endDate);
+
+      const response = await fetch(`/api/purchases?${params}`, {
+        headers: getAuthHeaders()
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to fetch purchases summary');
+      }
+
+      const result = await response.json();
+      if (result.success && result.purchases) {
+        const allPurchases = result.purchases.map((purchase: any) => ({
+          ...purchase,
+          total_amount: parseFloat(purchase.total_amount) || 0,
+          vat_amount: parseFloat(purchase.vat_amount) || 0,
+          breakdown_total_before_vat: parseFloat(purchase.breakdown_total_before_vat) || 0,
+          breakdown_total_vat: parseFloat(purchase.breakdown_total_vat) || 0,
+          breakdown_total_with_vat: parseFloat(purchase.breakdown_total_with_vat) || 0
+        }));
+        
+        const totalVat = allPurchases.reduce((sum: number, purchase: Purchase) => 
+          sum + purchase.breakdown_total_vat, 0);
+        const totalAmount = allPurchases.reduce((sum: number, purchase: Purchase) => 
+          sum + (purchase.breakdown_total_with_vat > 0 ? purchase.breakdown_total_with_vat : purchase.total_amount), 0);
+        
+        const totalAmountBeforeVat = allPurchases.reduce((sum: number, purchase: Purchase) => 
+          sum + purchase.breakdown_total_before_vat, 0);
+        
+        setSummary({
+          totalPurchases: allPurchases.length,
+          totalAmount,
+          totalVat,
+          totalAmountBeforeVat,
+          averageAmount: allPurchases.length > 0 ? totalAmount / allPurchases.length : 0
+        });
+      }
+    } catch (error) {
+      console.error('Error fetching purchases summary:', error);
+      // Don't show error toast for summary as it's secondary
+    }
+  };
   const fetchProjects = async () => {
     try {
       setLoading(true);
@@ -484,6 +538,16 @@ function Purchases() {
     setSelectedProject('');
     setStartDate('');
     setEndDate('');
+    setCurrentPage(1);
+  };
+
+  const handlePageChange = (page: number) => {
+    setCurrentPage(page);
+  };
+
+  const handleItemsPerPageChange = (newLimit: number) => {
+    setItemsPerPage(newLimit);
+    setCurrentPage(1);
   };
 
   const handleFilePreview = (purchase: Purchase) => {
@@ -575,7 +639,7 @@ function Purchases() {
     fetchPurchases();
     fetchProjects();
     fetchSuppliers();
-  }, [searchTerm, selectedProject, startDate, endDate]);
+  }, [searchTerm, selectedProject, startDate, endDate, currentPage, itemsPerPage]);
 
   useEffect(() => {
     fetchSuppliers();
@@ -726,14 +790,20 @@ function Purchases() {
               type="text"
               placeholder="البحث في الفواتير..."
               value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
+              onChange={(e) => {
+                setSearchTerm(e.target.value);
+                setCurrentPage(1);
+              }}
               className="w-full pr-10 pl-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#4A3B85] focus:border-transparent"
             />
           </div>
           
           <select
             value={selectedProject}
-            onChange={(e) => setSelectedProject(e.target.value)}
+            onChange={(e) => {
+              setSelectedProject(e.target.value);
+              setCurrentPage(1);
+            }}
             className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#4A3B85] focus:border-transparent"
           >
             <option value="">جميع المشاريع</option>
@@ -745,7 +815,10 @@ function Purchases() {
           <input
             type="date"
             value={startDate}
-            onChange={(e) => setStartDate(e.target.value)}
+            onChange={(e) => {
+              setStartDate(e.target.value);
+              setCurrentPage(1);
+            }}
             className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#4A3B85] focus:border-transparent"
             placeholder="من تاريخ"
           />
@@ -753,7 +826,10 @@ function Purchases() {
           <input
             type="date"
             value={endDate}
-            onChange={(e) => setEndDate(e.target.value)}
+            onChange={(e) => {
+              setEndDate(e.target.value);
+              setCurrentPage(1);
+            }}
             className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#4A3B85] focus:border-transparent"
             placeholder="إلى تاريخ"
           />
@@ -764,6 +840,28 @@ function Purchases() {
           >
             مسح الفلاتر
           </button>
+        </div>
+        
+        {/* Items per page selector */}
+        <div className="mt-4 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-gray-600">عرض:</span>
+            <select
+              value={itemsPerPage}
+              onChange={(e) => handleItemsPerPageChange(Number(e.target.value))}
+              className="px-3 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-[#4A3B85] focus:border-transparent text-sm"
+            >
+              <option value={5}>5</option>
+              <option value={10}>10</option>
+              <option value={20}>20</option>
+              <option value={50}>50</option>
+            </select>
+            <span className="text-sm text-gray-600">عنصر لكل صفحة</span>
+          </div>
+          
+          <div className="text-sm text-gray-600">
+            عرض {((currentPage - 1) * itemsPerPage) + 1} إلى {Math.min(currentPage * itemsPerPage, pagination.total)} من {pagination.total} فاتورة
+          </div>
         </div>
       </div>
 
@@ -926,6 +1024,79 @@ function Purchases() {
                 ))}
               </tbody>
             </table>
+          </div>
+        )}
+        
+        {/* Pagination */}
+        {!loading && purchases.length > 0 && pagination.pages > 1 && (
+          <div className="px-6 py-4 border-t border-gray-200">
+            <div className="flex items-center justify-between">
+              <div className="text-sm text-gray-700">
+                صفحة {pagination.currentPage} من {pagination.pages}
+              </div>
+              
+              <div className="flex items-center space-x-2">
+                <button
+                  onClick={() => handlePageChange(1)}
+                  disabled={pagination.currentPage === 1}
+                  className="px-3 py-1 text-sm border border-gray-300 rounded hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed ml-2"
+                >
+                  الأولى
+                </button>
+                
+                <button
+                  onClick={() => handlePageChange(pagination.currentPage - 1)}
+                  disabled={pagination.currentPage === 1}
+                  className="px-3 py-1 text-sm border border-gray-300 rounded hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed ml-2"
+                >
+                  السابقة
+                </button>
+                
+                {/* Page numbers */}
+                {Array.from({ length: Math.min(5, pagination.pages) }, (_, i) => {
+                  let pageNum;
+                  if (pagination.pages <= 5) {
+                    pageNum = i + 1;
+                  } else if (pagination.currentPage <= 3) {
+                    pageNum = i + 1;
+                  } else if (pagination.currentPage >= pagination.pages - 2) {
+                    pageNum = pagination.pages - 4 + i;
+                  } else {
+                    pageNum = pagination.currentPage - 2 + i;
+                  }
+                  
+                  return (
+                    <button
+                      key={pageNum}
+                      onClick={() => handlePageChange(pageNum)}
+                      className={`px-3 py-1 text-sm border rounded ml-2 ${
+                        pageNum === pagination.currentPage
+                          ? 'bg-[#4A3B85] text-white border-[#4A3B85]'
+                          : 'border-gray-300 hover:bg-gray-50'
+                      }`}
+                    >
+                      {pageNum}
+                    </button>
+                  );
+                })}
+                
+                <button
+                  onClick={() => handlePageChange(pagination.currentPage + 1)}
+                  disabled={pagination.currentPage === pagination.pages}
+                  className="px-3 py-1 text-sm border border-gray-300 rounded hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed ml-2"
+                >
+                  التالية
+                </button>
+                
+                <button
+                  onClick={() => handlePageChange(pagination.pages)}
+                  disabled={pagination.currentPage === pagination.pages}
+                  className="px-3 py-1 text-sm border border-gray-300 rounded hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed ml-2"
+                >
+                  الأخيرة
+                </button>
+              </div>
+            </div>
           </div>
         )}
       </div>
