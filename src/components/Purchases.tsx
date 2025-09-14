@@ -29,6 +29,7 @@ import Select from 'react-select';
 import { toast, ToastContainer } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
 import { DocumentScanner } from './DocumentScanner';
+import SupplierForm from './SupplierForm';
 
 interface Purchase {
   id: number;
@@ -57,6 +58,7 @@ interface PurchaseSummary {
   totalAmount: number;
   totalAmountBeforeVat: number;
   averageAmount: number;
+  totalVat: number;
 }
 
 interface Project {
@@ -96,7 +98,8 @@ function Purchases() {
     totalPurchases: 0,
     totalAmount: 0,
     totalAmountBeforeVat: 0,
-    averageAmount: 0
+    averageAmount: 0,
+    totalVat: 0
   });
   
   const [loading, setLoading] = useState(true);
@@ -119,7 +122,7 @@ function Purchases() {
   const [uploadPreview, setUploadPreview] = useState<string | null>(null);
   const [showDocumentScanner, setShowDocumentScanner] = useState(false);
   const [scannedDocument, setScannedDocument] = useState<string | null>(null);
-
+  const [isSupplierFormOpen, setIsSupplierFormOpen] = useState(false);
   const [formData, setFormData] = useState({
     invoice_number: '',
     supplier_name: '',
@@ -189,7 +192,8 @@ function Purchases() {
         }));
         
         setPurchases(processedPurchases);
-        
+        const totalVat = processedPurchases.reduce((sum: number, purchase: Purchase) => 
+          sum + purchase.breakdown_total_vat, 0);
         const totalAmount = processedPurchases.reduce((sum: number, purchase: Purchase) => 
           sum + (purchase.breakdown_total_with_vat > 0 ? purchase.breakdown_total_with_vat : purchase.total_amount), 0);
         
@@ -199,6 +203,7 @@ function Purchases() {
         setSummary({
           totalPurchases: processedPurchases.length,
           totalAmount,
+          totalVat,
           totalAmountBeforeVat,
           averageAmount: processedPurchases.length > 0 ? totalAmount / processedPurchases.length : 0
         });
@@ -244,6 +249,16 @@ function Purchases() {
       setLoading(false);
     }
   };
+
+  const handleSupplierSave = (savedSupplier: any) => {
+  const newSupplier = {
+    id: savedSupplier.id, // Assuming backend returns id
+    name: savedSupplier.name,
+  };
+  setSuppliers((prev) => [...prev, newSupplier]); // Add to suppliers state to update options
+  setFormData((prev) => ({ ...prev, supplier_name: savedSupplier.name })); // Select new supplier
+  setIsSupplierFormOpen(false); // Close modal
+};
 
   const fetchProjectMissions = async (projectId: string) => {
     try {
@@ -965,6 +980,13 @@ function Purchases() {
                         menu: (provided) => ({ ...provided, textAlign: 'right' }),
                       }}
                     />
+                    <button
+                      type="button"
+                      onClick={() => setIsSupplierFormOpen(true)}
+                      className="mt-2 px-4 py-2 bg-[#4A3B85] text-white rounded-lg hover:bg-[#5A4B95] transition-colors duration-200 flex items-center text-sm"
+                    >
+                      إضافة مورد
+                    </button>
                   </div>
                 </div>
 
@@ -1029,13 +1051,64 @@ function Purchases() {
                   <label className="block text-sm font-medium text-gray-700 mb-1">
                     تاريخ الفاتورة *
                   </label>
-                  <input
-                    type="date"
-                    required
-                    value={formData.invoice_date}
-                    onChange={(e) => setFormData({...formData, invoice_date: e.target.value})}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#4A3B85] focus:border-transparent"
-                  />
+                  <div className="relative flex items-center">
+                    <input
+                      type="text"
+                      required
+                      value={formData.invoice_date
+                        ? `${new Date(formData.invoice_date).getDate().toString().padStart(2, '0')}/${(new Date(formData.invoice_date).getMonth() + 1).toString().padStart(2, '0')}/${new Date(formData.invoice_date).getFullYear()}`
+                        : ''}
+                      onChange={(e) => {
+                        const input = e.target.value;
+                        // Validate DD/MM/YYYY format
+                        const regex = /^(\d{2})\/(\d{2})\/(\d{4})$/;
+                        if (regex.test(input)) {
+                          const [day, month, year] = input.split('/');
+                          const isoDate = `${year}-${month}-${day}`;
+                          // Validate date is valid
+                          const date = new Date(isoDate);
+                          if (!isNaN(date.getTime()) && date.getFullYear() === parseInt(year)) {
+                            setFormData({ ...formData, invoice_date: isoDate });
+                          } else {
+                            toast.error('تاريخ غير صالح');
+                          }
+                        } else if (!input) {
+                          setFormData({ ...formData, invoice_date: '' });
+                        }
+                      }}
+                      onBlur={(e) => {
+                        const input = e.target.value;
+                        const regex = /^(\d{2})\/(\d{2})\/(\d{4})$/;
+                        if (input && !regex.test(input)) {
+                          toast.error('يرجى إدخال التاريخ بصيغة يوم/شهر/سنة (مثال: 14/09/2025)');
+                        }
+                      }}
+                      placeholder="يوم/شهر/سنة (مثال: 14/09/2025)"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#4A3B85] focus:border-transparent"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const dateInput = document.getElementById('hidden-date-picker') as HTMLInputElement;
+                        dateInput.showPicker(); // Trigger native date picker
+                      }}
+                      className="absolute left-2 top-1/2 transform -translate-y-1/2 p-1 text-gray-600 hover:text-[#4A3B85] transition-colors duration-200"
+                      title="اختر تاريخ"
+                    >
+                      <Calendar className="h-5 w-5" />
+                    </button>
+                    <input
+                      id="hidden-date-picker"
+                      type="date"
+                      value={formData.invoice_date}
+                      onChange={(e) => {
+                        const isoDate = e.target.value; // YYYY-MM-DD
+                        setFormData({ ...formData, invoice_date: isoDate });
+                      }}
+                      className="absolute w-0 h-0 opacity-0 pointer-events-none"
+                      style={{ top: '110%', right: '100%', transform: 'translate(-50%, -50%)' }}
+                    />
+                  </div>
                 </div>
               </div>
 
@@ -1129,6 +1202,15 @@ function Purchases() {
         </div>
       )}
 
+      
+      {isSupplierFormOpen && (
+        <SupplierForm
+          isOpen={isSupplierFormOpen}
+          onClose={() => setIsSupplierFormOpen(false)}
+          onSave={handleSupplierSave}
+        />
+      )}
+      
       {showDocumentScanner && (
         <div className="fixed inset-0 bg-black bg-opacity-90 flex items-center justify-center z-50">
           <div className="w-full h-full max-w-4xl max-h-screen p-4">
