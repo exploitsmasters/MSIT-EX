@@ -29,7 +29,8 @@ import {
   ArrowLeft,
   DollarSign,
   Package,
-  BarChart3
+  BarChart3,
+  FileText
 } from 'lucide-react';
 import { toast, ToastContainer } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
@@ -173,6 +174,8 @@ function PricesOffer() {
   const [showProformaPreview, setShowProformaPreview] = useState(false);
   const [proformaQuotation, setProformaQuotation] = useState<Quotation | null>(null);
 
+  // Dropdown states for convert button
+  const [openDropdownId, setOpenDropdownId] = useState<number | null>(null);
 
   
 
