@@ -789,6 +789,14 @@ function PricesOffer() {
 
   return (
     <div className="space-y-6">
+      {/* Click outside to close dropdown */}
+      {openDropdownId && (
+        <div 
+          className="fixed inset-0 z-40" 
+          onClick={() => setOpenDropdownId(null)}
+        />
+      )}
+      
       <ToastContainer
         position="top-right"
         autoClose={5000}
