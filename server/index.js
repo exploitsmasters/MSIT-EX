@@ -115,16 +115,15 @@
 
      const [countResult] = await pool.execute(countQuery, countParams);
      const total = countResult[0].total;
--    const pages = limit === 'all' ? 1 : Math.ceil(total / Number(limit));
-+    const pages = limit === 'all' ? 1 : Math.ceil(total / Number(limit));
+     const pages = limit === 'all' ? 1 : Math.ceil(total / Number(limit));
 
-+    // Add cache control headers to prevent stale data
-+    res.set({
-+      'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
-+      'Pragma': 'no-cache',
-+      'Expires': '0',
-+      'Surrogate-Control': 'no-store'
-+    });
+     // Add cache control headers to prevent stale data
+     res.set({
+       'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+       'Pragma': 'no-cache',
+       'Expires': '0',
+       'Surrogate-Control': 'no-store'
+     });
 
      res.json({
        success: true,
@@ -1277,3 +1276,8 @@ app.patch('/api/invoices/:id/payment-status', authenticateToken, async (req, res
     connection.release();
   }
 });
+
+const { generateInstallationsInvoicePDF } = require('./routes/generate-installations-invoice');
+const convertQuotationRoutes = require('./routes/convert-quotation');
+
+// Middleware
